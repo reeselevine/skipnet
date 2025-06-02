@@ -848,7 +848,8 @@ class RLFeedforwardGateI(nn.Module):
         softmax = self.prob_layer(x)
 
         if self.training:
-            action = softmax.multinomial()
+            action = softmax.multinomial(1)
+            action = action.squeeze(1)
             self.saved_action = action
         else:
             action = (softmax[:, 1] > 0.5).float()
@@ -889,7 +890,8 @@ class RLFeedforwardGateII(nn.Module):
         softmax = self.prob_layer(x)
 
         if self.training:
-            action = softmax.multinomial()
+            action = softmax.multinomial(1)
+            action = action.squeeze(1)
             self.saved_action = action
         else:
             action = (softmax[:, 1] > 0.5).float()
@@ -1032,8 +1034,10 @@ class ResNetFeedForwardRL(nn.Module):
 
         if reinforce:  # for pure RL
             softmax = self.softmax(x)
-            action = softmax.multinomial()
-            self.saved_actions.append(action)
+            dist = torch.distributions.Categorical(softmax)
+            action = dist.sample()
+            log_prob = dist.log_prob(action)
+            self.saved_actions.append((action, log_prob))
 
         return x, masks, gprobs
 
@@ -1133,14 +1137,16 @@ class RNNGatePolicy(nn.Module):
             proj = self.proj(out.squeeze())
             prob = self.prob(proj)
             bi_prob = torch.cat([1 - prob, prob], dim=1)
-            action = bi_prob.multinomial()
-            self.saved_actions.append(action)
+            dist = torch.distributions.Categorical(bi_prob)
+            action = dist.sample()
+            log_prob = dist.log_prob(action)
+            self.saved_actions.append((action, log_prob))
         else:
             proj = self.proj(out.squeeze())
             prob = self.prob(proj)
             bi_prob = torch.cat([1 - prob, prob], dim=1)
             action = (prob > 0.5).float()
-            self.saved_actions.append(action)
+            self.saved_actions.append((action, None)) 
         action = action.view(action.size(0), 1, 1, 1).float()
         return action, bi_prob
 
@@ -1265,10 +1271,13 @@ class ResNetRecurrentGateRL(nn.Module):
         if self.training:
             x = self.fc(x)
             softmax = self.softmax(x)
-            pred = softmax.multinomial()
+            dist = torch.distributions.Categorical(softmax)
+            action = dist.sample()
+            log_prob = dist.log_prob(action)
+            pred = (action, log_prob)
         else:
             x = self.fc(x)
-            pred = x.max(1)[1]
+            pred = (x.max(1)[1], None)
         self.saved_actions.append(pred)
 
         return x, masks, gprobs

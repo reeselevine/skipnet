@@ -209,14 +209,14 @@ def run_training(args, tune_config={}, reporter=None):
         # measuring data loading time
         data_time.update(time.time() - end)
 
-        target = target.cuda(async=False)
+        target = target.cuda(non_blocking=False)
         input_var = Variable(input).cuda()
         target_var = Variable(target).cuda()
 
         # compute output
         output, masks, probs = model(input_var)
 
-        skips = [mask.data.le(0.5).float().mean() for mask in masks]
+        skips = [mask.detach().le(0.5).float().mean() for mask in masks]
         if skip_ratios.len != len(skips):
             skip_ratios.set_len(len(skips))
 
@@ -225,35 +225,39 @@ def run_training(args, tune_config={}, reporter=None):
         # re-weight gate rewards
         normalized_alpha = args.alpha / len(gate_saved_actions)
         # intermediate rewards for each gate
-        for act in gate_saved_actions:
-            gate_rewards.append((1 - act.float()).data * normalized_alpha)
+        for action, _ in gate_saved_actions:
+            gate_rewards.append((1 - action.float()) * normalized_alpha)
         # pdb.set_trace()
         # collect cumulative future rewards
-        R = - pred_loss.data
+        R = - pred_loss.detach()
         cum_rewards = []
         for r in gate_rewards[::-1]:
             R = r + args.gamma * R
             cum_rewards.insert(0, R)
 
-        # apply REINFORCE to each gate
-        # Pytorch 2.0 version. `reinforce` function got removed in Pytorch 3.0
-        for action, R in zip(gate_saved_actions, cum_rewards):
-             action.reinforce(args.rl_weight * R)
+        policy_losses = []
+        for (_, log_prob), R in zip(gate_saved_actions, cum_rewards):
+            policy_losses.append(-log_prob * args.rl_weight * R)
 
+        policy_loss = torch.stack(policy_losses).sum()
 
+        # Supervised loss (e.g., cross-entropy)
         total_loss = total_criterion(output, target_var)
 
+        # Combine losses
+        loss = policy_loss + total_loss
+
+        # Optimize
         optimizer.zero_grad()
-        # optimize hybrid loss
-        torch.autograd.backward(gate_saved_actions + [total_loss])
+        loss.backward()
         optimizer.step()
 
         # measure accuracy and record loss
-        prec1, = accuracy(output.data, target, topk=(1,))
+        prec1, = accuracy(output.detach(), target, topk=(1,))
         total_rewards.update(cum_rewards[0].mean(), input.size(0))
-        total_losses.update(total_loss.mean().data[0], input.size(0))
-        losses.update(pred_loss.mean().data[0], input.size(0))
-        top1.update(prec1[0], input.size(0))
+        total_losses.update(total_loss.mean().detach().item(), input.size(0))
+        losses.update(pred_loss.mean().detach().item(), input.size(0))
+        top1.update(prec1.item(), input.size(0))
         skip_ratios.update(skips, input.size(0))
         total_gate_reward = sum([r.mean() for r in gate_rewards])
 
@@ -326,18 +330,32 @@ def validate(args, test_loader, model):
     model.eval()
     end = time.time()
     for i, (input, target) in enumerate(test_loader):
-        target = target.cuda(async=True)
+        target = target.cuda(non_blocking=True)
         input_var = Variable(input, volatile=True).cuda()
         target_var = Variable(target, volatile=True).cuda()
 
         output, masks, probs = model(input_var)
-        skips = [mask.data.le(0.5).float().mean() for mask in masks]
+
+        _, predicted = output.max(1)
+
+        # Get skip counts
+        mask_matrix = torch.stack([m.detach().squeeze() for m in masks], dim=1)  # [B, num_blocks]
+        num_skipped = (mask_matrix <= 0.5).sum(dim=1)
+        num_executed = (mask_matrix > 0.5).sum(dim=1)
+
+        # Print per-sample results
+        for j in range(input.size(0)):
+                print(f"[Sample {i * input.size(0) + j}] "
+                                  f"Label={target[j].item()} Pred={predicted[j].item()} "
+                                            f"Executed={num_executed[j].item()} Skipped={num_skipped[j].item()}")
+
+        skips = [mask.detach().le(0.5).float().mean() for mask in masks]
         if skip_ratios.len != len(skips):
             skip_ratios.set_len(len(skips))
 
         # measure accuracy and record loss
-        prec1, = accuracy(output.data, target, topk=(1,))
-        top1.update(prec1[0], input.size(0))
+        prec1, = accuracy(output.detach(), target, topk=(1,))
+        top1.update(prec1.item(), input.size(0))
         skip_ratios.update(skips, input.size(0))
         batch_time.update(time.time() - end)
         end = time.time()

@@ -351,8 +351,14 @@ def validate(args, test_loader, model):
         prec1, = accuracy(output.detach(), target, topk=(1,))
         top1.update(prec1.item(), input.size(0))
         skip_ratios.update(skips, input.size(0))
+        elapsed = time.time() - end
         batch_time.update(time.time() - end)
-        end = time.time()
+
+        # Print per-sample results
+        for j in range(input.size(0)):
+            print(f"[Sample {i * input.size(0) + j}] "
+                  f"Label={target[j].item()} Pred={predicted[j].item()} "
+                  f"Executed={num_executed[j].item()} Skipped={num_skipped[j].item()} "
 
         if i % args.print_freq == 0 or (i == (len(test_loader) - 1)):
             logging.info(
@@ -366,6 +372,8 @@ def validate(args, test_loader, model):
                     top1=top1
                 )
             )
+        end = time.time()
+
     logging.info(' * Prec@1 {top1.avg:.3f}'.format(top1=top1))
 
     skip_summaries = []

@@ -343,12 +343,6 @@ def validate(args, test_loader, model):
         num_skipped = (mask_matrix <= 0.5).sum(dim=1)
         num_executed = (mask_matrix > 0.5).sum(dim=1)
 
-        # Print per-sample results
-        for j in range(input.size(0)):
-                print(f"[Sample {i * input.size(0) + j}] "
-                                  f"Label={target[j].item()} Pred={predicted[j].item()} "
-                                            f"Executed={num_executed[j].item()} Skipped={num_skipped[j].item()}")
-
         skips = [mask.detach().le(0.5).float().mean() for mask in masks]
         if skip_ratios.len != len(skips):
             skip_ratios.set_len(len(skips))

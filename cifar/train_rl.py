@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.backends.cudnn as cudnn
 from torch.autograd import Variable
 import torch.nn.functional as F
+from torchvision.utils import save_image
 
 import os
 import shutil
@@ -68,6 +69,8 @@ def parse_args():
                         help='weight decay (default: 1e-4)')
     parser.add_argument('--print-freq', default=10, type=int,
                         help='print frequency (default: 10)')
+    parser.add_argument('--per-label-printing', action='store_true',
+                        help='print each label')
     parser.add_argument('--resume', default='', type=str,
                         help='path to  latest checkpoint (default: None)')
     parser.add_argument('--pretrained', dest='pretrained', action='store_true',
@@ -96,6 +99,15 @@ def parse_args():
                         help='discount factor, default: (0.99)')
     parser.add_argument('--restart', action='store_true',
                         help='restart training')
+    parser.add_argument('--split-samples', action='store_true',
+                        help='save the samples into "easy" and "hard" datasets')
+    parser.add_argument('--easy-skip-threshold', default=15, type=int,
+                        help='threshold for classifying an image as easy')
+    parser.add_argument('--hard-skip-threshold', default=8, type=int,
+                        help='threshold for classifying an image as hard')
+    parser.add_argument('--split-folder',
+                        type=str,
+                        help='folder to load split dataset from')
 
     args = parser.parse_args()
     return args
@@ -317,6 +329,12 @@ def run_training(args, tune_config={}, reporter=None):
                                                           'checkpoint_latest'
                                                           '.pth.tar'))
 
+def export_split_to_imagefolder(samples, output_dir):
+    for i, (img, label, pred, skipped) in enumerate(samples):
+        class_dir = os.path.join(output_dir, str(label))
+        os.makedirs(class_dir, exist_ok=True)
+        filename = os.path.join(class_dir, f"img_{i:05d}_pred{pred}_skip{skipped}.png")
+        save_image(img, filename)
 
 def validate(args, test_loader, model):
     batch_time = AverageMeter()
@@ -354,11 +372,35 @@ def validate(args, test_loader, model):
         elapsed = time.time() - end
         batch_time.update(time.time() - end)
 
+        easy_samples = []
+        medium_samples = []
+        hard_samples = []
+
+        if args.split_samples:
+            for j in range(input.size(0)):
+                img = input[j].cpu()
+                label = target[j].item()
+                pred = predicted[j].item()
+                skipped = num_skipped[j].item()
+                sample = (img, label, pred, skipped)
+
+                if skipped >= args.easy_skip_threshold:
+                    easy_samples.append(sample)
+                elif skipped < args.hard_skip_threshold:
+                    hard_samples.append(sample)
+                else:
+                    medium_samples.append(sample)
+
+            export_split_to_imagefolder(easy_samples, "split_datasets/easy_dataset")
+            export_split_to_imagefolder(easy_samples, "split_datasets/medium_dataset")
+            export_split_to_imagefolder(hard_samples, "split_datasets/hard_dataset")
+
         # Print per-sample results
-        for j in range(input.size(0)):
-            print(f"[Sample {i * input.size(0) + j}] "
-                  f"Label={target[j].item()} Pred={predicted[j].item()} "
-                  f"Executed={num_executed[j].item()} Skipped={num_skipped[j].item()} "
+        if args.per_label_printing:
+            for j in range(input.size(0)):
+                print(f"[Sample {i * input.size(0) + j}] "
+                      f"Label={target[j].item()} Pred={predicted[j].item()} "
+                      f"Executed={num_executed[j].item()} Skipped={num_skipped[j].item()}")
 
         if i % args.print_freq == 0 or (i == (len(test_loader) - 1)):
             logging.info(
@@ -414,7 +456,8 @@ def test_model(args):
     test_loader = prepare_test_data(dataset=args.dataset,
                                     batch_size=args.batch_size,
                                     shuffle=False,
-                                    num_workers=args.workers)
+                                    num_workers=args.workers,
+                                    filepath=args.split_folder)
 
     validate(args, test_loader, model)
 

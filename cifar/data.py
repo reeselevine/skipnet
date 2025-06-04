@@ -5,6 +5,7 @@ from __future__ import print_function
 
 import torch
 import torchvision
+from torchvision.datasets import ImageFolder
 import torchvision.transforms as transforms
 import numpy as np
 
@@ -70,7 +71,7 @@ def prepare_train_data(dataset='cifar10', batch_size=128,
 
 
 def prepare_test_data(dataset='cifar10', batch_size=128,
-                      shuffle=False, num_workers=4):
+                      shuffle=False, num_workers=4, filepath=None):
 
     if 'cifar' in dataset:
         transform_test = transforms.Compose([
@@ -79,10 +80,14 @@ def prepare_test_data(dataset='cifar10', batch_size=128,
                                  (0.2023, 0.1994, 0.2010)),
         ])
 
-        testset = torchvision.datasets.__dict__[dataset.upper()](root='/tmp/data',
-                                               train=False,
-                                               download=True,
-                                               transform=transform_test)
+        if filepath:
+            testset = ImageFolder(root=filepath, transform=transform_test)
+        else:
+            testset = torchvision.datasets.__dict__[dataset.upper()](root='/tmp/data',
+                                                   train=False,
+                                                   download=True,
+                                                   transform=transform_test)
+
         test_loader = torch.utils.data.DataLoader(testset,
                                                   batch_size=batch_size,
                                                   shuffle=shuffle,

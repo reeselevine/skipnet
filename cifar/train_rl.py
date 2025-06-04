@@ -336,13 +336,6 @@ def validate(args, test_loader, model):
 
         output, masks, probs = model(input_var)
 
-        _, predicted = output.max(1)
-
-        # Get skip counts
-        mask_matrix = torch.stack([m.detach().squeeze() for m in masks], dim=1)  # [B, num_blocks]
-        num_skipped = (mask_matrix <= 0.5).sum(dim=1)
-        num_executed = (mask_matrix > 0.5).sum(dim=1)
-
         skips = [mask.detach().le(0.5).float().mean() for mask in masks]
         if skip_ratios.len != len(skips):
             skip_ratios.set_len(len(skips))
